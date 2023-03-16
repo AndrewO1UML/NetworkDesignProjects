@@ -25,28 +25,32 @@ using namespace::std;
 #define BUFLEN 10000 
 #define packetDebugMode 0
 
-#define corruptionPercent 0.000
-#define corruptionStrength 0.000
+#define corruptionPercent 0.00
+#define corruptionStrength 0.500
 
-char inStr[] = "bmp_24.bmp";
+char inStr[] = "Space_dress.bmp";
 char outStr[] = "bmp_out.bmp";
+char ack[5] = "Ack";
+char nack[5] = "Nack";
 
 char checksum(char* packetData, int size) {
 	/*
-		Take the sum of the 1024 Bytes (first byte + second byte + ... + 1024th Byte) 
+		Take the sum of the 1024 Bytes (first byte + second byte + ... + 1024th Byte)
 		The sum is stored into result and then returns is complement.
 		Ex: packeData[1} has 1024 blocks which contains 1 byte in each block, this function adds those up together
-			and takes it complement. 
+			and takes it complement.
 	*/
 	char result = 0;
 	int i;
-	
-	
+
+
 	for (i = 0; i < size; i++) {
-		result += packetData[i]; 
+		result += packetData[i];
 	}
-	
-	return ~result; 	
+
+	//printf("Result: %d\n", result);
+
+	return ~result;
 }
 
 int Make_Packet(FILE** fpIn, char* packetData) {
@@ -88,14 +92,14 @@ int Make_File(FILE** fpOut, char* packetData) {
 	return fileEnd;
 }
 
-int Corruptor_Challenge(float challenge	, float corruption_amount, char* packetData) {
+int Corruptor_Challenge(float challenge, float corruption_amount, char* packetData) {
 	/*
 		passes a pacekt of data through a challenge, difficulty determined by the value of challenge in a decimal representation of the percent
 		difficulty, 3 sig-figs.
 		corruption_ammount is the decimal representation of the ammount of corruption each corrupted packet will expirence.
 		if the challenge hits, the packet will be randomly disrupted. if not it will be unaffected.
 		returns 1 if challenge hits, otherwise 0
-	
+
 	*/
 
 	int random_num, challenge_result;
@@ -132,21 +136,22 @@ int main(int argc, char* argv[])
 	SOCKET client;
 	sockaddr_in client_addr, si_other;
 	hostent* localHost;
-	
+
 	FILE* fpIn;
 	FILE* fpOut;
 
 	char buf[BUFLEN];
 	char message[20] = "file_send_done";
-	
-	char endResult; 
+
+	char endResult;
 	int slen;
 
-	char concat[1025]; 
-		
-	int j; 
-	int i; 
-	
+	char concat[1025];
+
+	int j;
+	int i;
+	int checkValid = 1;
+
 	slen = sizeof(si_other);
 
 	char* localIP;
@@ -209,21 +214,58 @@ int main(int argc, char* argv[])
 
 		int fileEnd = 0;
 		int fileEndOut = 0;
+		int packetValid = 1; // set to 2 for corruptor check
 		int packetCorrupted;
+		char preCheckVal, endCheckVal;
+		char cleanData[1024];
 
 		while (fileEnd == 0) {
 
-			fileEnd = Make_Packet(&fpIn, packetData);
+			// create packet and inital checksum
+			if (packetValid == 1) {
 
-			packetCorrupted = Corruptor_Challenge(corruptionPercent, corruptionStrength, packetData);
+				fileEnd = Make_Packet(&fpIn, packetData);
+				memcpy(cleanData, packetData, sizeof(cleanData));
 
-			if (packetCorrupted) {
-				printf("Packet Corrupted\n");
+				preCheckVal = checksum(packetData, 1024);
+				printf("checkSum before transmission = %x\n", preCheckVal & 0xFF);
+
+				packetValid = 0;
+
 			}
-			//printf("%s\n", packetData);
-			fileEndOut = Make_File(&fpOut, packetData);
+			// loop here until valid checksum
+			else if (packetValid == 0){
+				memcpy(packetData, cleanData, sizeof(cleanData));
+				packetCorrupted = Corruptor_Challenge(corruptionPercent, corruptionStrength, packetData);
 
-			//printf("fileEndIn = %d fileEndOut = %d\n", fileEnd, fileEndOut);
+				if (packetCorrupted) {
+					printf("Packet Corrupted\n");
+				}
+
+
+				endCheckVal = checksum(packetData, 1024);
+				printf("checkSum after transmission = %x\n", endCheckVal & 0xFF);
+
+				if (endCheckVal == preCheckVal) {
+					packetValid = 1;
+
+
+					fileEndOut = Make_File(&fpOut, packetData);
+				}
+
+			}
+			// test corruptor
+			else if (packetValid == 2) {
+				fileEnd = Make_Packet(&fpIn, packetData);
+				packetCorrupted = Corruptor_Challenge(corruptionPercent, corruptionStrength, packetData);
+				fileEndOut = Make_File(&fpOut, packetData);
+
+			}
+
+			
+			
+		
+
 
 		}
 
@@ -235,23 +277,31 @@ int main(int argc, char* argv[])
 		return 0;
 	}
 
-	
+
 
 	//start communication
 
+	clock_t start, end;
+
+	start = clock();
+
 	while (fileEnd == 0)
-	{ 
-		fileEnd = Make_Packet(&fpIn, packetData); 
-		endResult = checksum(packetData, 1024); 
-		
-		// concatenate packetData with checksum (endResult) 
-		j = 0; 
-		for (i = 0; i < 1024; i++) {
-			concat[j] = packetData[i];
-			j++; 
+	{
+		// if the last packet was recieved correctly, generate a new one
+		if (checkValid == 1) {
+			fileEnd = Make_Packet(&fpIn, packetData);
+			endResult = checksum(packetData, 1024);
+
+			// concatenate packetData with checksum (endResult) 
+			j = 0;
+			for (i = 0; i < 1024; i++) {
+				concat[j] = packetData[i];
+				j++;
+			}
+			concat[1024] = endResult;
+			checkValid = 0;
 		}
-		concat[1025] = endResult; 
-		
+
 		if (fileEnd == 0) {
 			//send the message
 			if (sendto(client, concat, 1025, 0, (struct sockaddr*)&si_other, slen) == SOCKET_ERROR)
@@ -259,7 +309,7 @@ int main(int argc, char* argv[])
 				printf("sendto() failed with error code : %d", WSAGetLastError());
 				while (1);
 				exit(EXIT_FAILURE);
-			}	
+			}
 		}
 		else {
 			//send the message
@@ -282,19 +332,34 @@ int main(int argc, char* argv[])
 			exit(EXIT_FAILURE);
 		}
 
-		puts(buf);
+		//puts(buf);
 
-		//delay 500ms to artificially slow program down
-		Sleep(100);
+		if (strcmp(buf, ack) == 0) {
+			checkValid = 1;
+		}
+		else if (strcmp(buf, nack) == 0) {
+			checkValid = 0;
+		}
+
+		//delay 100ms to artificially slow program down
+		//Sleep(100);
 
 		if (fileEnd == 1) {
 			fclose(fpIn);
 		}
 	}
 
+	end = clock();
+
+	double cpu_time_used = ((double)(end - start)) / CLOCKS_PER_SEC;	//taken from: https://www.geeksforgeeks.org/how-to-measure-time-taken-by-a-program-in-c/
+
+
 	//close socket
 	closesocket(client);
 	WSACleanup();
+
+	printf("time take = %f", cpu_time_used);
+	while (1);
 
 	return 0;
 }
