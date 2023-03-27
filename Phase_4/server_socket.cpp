@@ -22,29 +22,26 @@ using namespace::std;
 
 #pragma comment(lib,"ws2_32.lib") //Winsock Library
 
+//global constants
+
 #define BUFLEN 10000
 
-#define corruptionPercent 0.050
-#define corruptionStrength 0.500
+#define corruptionPercent 0.100
+#define corruptionStrength 0.100
+#define percentLost 0.000
+#define errorCheckActive 1
 
 char inStr[] = "Space_dress.bmp";
 char outStr[] = "bmp_out.bmp";
 
-
-/*int timeout() {
-	
-	
-	
-}*/
-
-char checksum(char* packetData, int size) {
+int checksum(char* packetData, int size) {
 	/*
 		Take the sum of the 1024 Bytes (first byte + second byte + ... + 1024th Byte)
 		The sum is stored into result and then returns is complement.
 		Ex: packeData[1} has 1024 blocks which contains 1 byte in each block, this function adds those up together
 			and takes it complement.
 	*/
-	char result = 0;
+	int result = 0;
 	int i;
 
 	for (i = 0; i < size; i++) {
@@ -54,20 +51,31 @@ char checksum(char* packetData, int size) {
 	return ~result;
 }
 
-int Make_Packet(FILE** fpIn, char* packetData) {
+int Make_Packet(FILE** fpIn, char* packetData, char sequence) {
 	/*
 		updates packetData array to be the next 1KB in your defined "fpIn"
 		returns 1 when the end of the file has been reached
 		otherwise 0
+
+		adds the checksum values in fields 1024-1027, and the sequence number in 1028
 	*/
 	int freadReturn;
 	int fileEnd = 0;
+	int checksumVal = 0;
 
 
 	freadReturn = fread(packetData, 1, 1024, *fpIn);
 	if (freadReturn == 0) {
 		fileEnd = 1;
 	}
+
+	checksumVal = checksum(packetData, 1024);
+
+	packetData[1024] = (char)((checksumVal & 0xFF000000) >> 24);
+	packetData[1025] = (char)((checksumVal & 0x00FF0000) >> 16);
+	packetData[1026] = (char)((checksumVal & 0x0000FF00) >> 8);
+	packetData[1027] = (char)(checksumVal & 0x000000FF);
+	packetData[1028] = sequence;
 
 	return fileEnd;
 }
@@ -131,6 +139,38 @@ int Corruptor_Challenge(float challenge, float corruption_amount, char* packetDa
 	return challenge_result;
 }
 
+int Packet_Loss(float challenge, char* packetData) {
+	/*
+		used to simulate packet loss, replaces the packet with NULL if the challenge hits.
+		percentage of packets lost is determined by the value in challenge, accurate down to 3 sig-figs
+
+		returns 1 if packet is lost, else 0
+	*/
+
+	int random_num, isLost;
+
+	random_num = rand() % 1000;
+
+	if (random_num < (challenge * 1000)) {
+		// challenge hits
+
+		for (int i = 0; i < sizeof(packetData); ++i) {
+
+			packetData[i] = 0;
+		}
+
+		isLost = 1;
+	}
+
+	else {
+		// challenge misses
+
+		isLost = 0;
+	}
+
+	return isLost;
+}
+
 int main(int argc, char* argv[])
 {
 	WSADATA wsa;
@@ -143,8 +183,10 @@ int main(int argc, char* argv[])
 	char ack[5] = "Ack";
 	char nack[5] = "Nack";
 	char done_message[20] = "file_send_done";
-	char checkVal0, checkVal1;
-	char packetData[1024];
+	int checkVal0, checkVal1;
+	char packetData[1029];
+	int sequenceExpected = 1;
+	int sequenceRecv;
 
 	FILE* fpOut;
 
@@ -194,41 +236,19 @@ int main(int argc, char* argv[])
 	}
 
 	int fileEnd = 0;
-	
+
+
 	//keep listening for data
 	while (fileEnd == 0)
 	{
-	
+
+
 		//printf("Waiting for data...");
 		fflush(stdout);
 
 		//clear the buffer by filling null, it might have previously received data
 		memset(buf, '\0', BUFLEN);
-		
-		/*// Timeout or Error Check receiving packet 
-		// Referenced: https://stackoverflow.com/questions/21850790/c-udp-recvfrom-client-side
-		fd_set fds;
-		struct timeval tv;
-		int selResult;
-		
-		// Set the filer descriptor set. 
-		FD_ZERO(&fds);
-		FD_SET(server, &fds);
-		
-		tv.tv_sec = 10;
-		tv.tv_usec = 0; 
-		
-		// Wait until timeout on data received.
-		selResult = select(server, &fds, NULL, NULL, &tv);
-		if (selResult == 0) {
-			printf("Timeout...\n"); 
-			return 0; 
-		}
-		else if (selResult == -1) {
-			printf("Error...\n"); 
-			return 1; 
-		}*/
-		
+
 		//try to receive some data, this is a blocking call
 		if ((recv_len = recvfrom(server, buf, BUFLEN, 0, (struct sockaddr*)&client, &slen)) == SOCKET_ERROR)
 		{
@@ -236,32 +256,62 @@ int main(int argc, char* argv[])
 			while (1);
 			exit(EXIT_FAILURE);
 		}
-		
 
 
-
-		//print details of the client/peer and the data received
 		//printf("Received packet from %s:%d\n", inet_ntoa(client.sin_addr), ntohs(client.sin_port));
 
 		if (strcmp(buf, done_message) == 0) {
 			fileEnd = 1;
 		}
 		else {
-			//corrupt packet to simulate unreliable connection
+			//corrupt packet or lose packet to simulate unreliable connection
+
 			int packetCorrupted = Corruptor_Challenge(corruptionPercent, corruptionStrength, buf);
+			int packetLost = Packet_Loss(percentLost, buf);
+
+
 			//calculate checksums
-			for (int i = 0; i < 1024; ++i) {
+			for (int i = 0; i < 1029; ++i) {
 				packetData[i] = buf[i];
 			}
-			checkVal0 = buf[1024];
 
-			checkVal1 = checksum(packetData, 1024);
+			//simulating lost packet, need to force fail checksum to get program to skip make_packet
+			if (packetLost == 0) {
+				checkVal0 = ((int)packetData[1024] << 24) & 0xFF000000;
+				checkVal0 |= ((int)packetData[1025] << 16) & 0x00FF0000;
+				checkVal0 |= ((int)packetData[1026] << 8) & 0x0000FF00;
+				checkVal0 |= ((int)packetData[1027]) & 0x000000FF;
+
+				if (errorCheckActive == 1) {
+					checkVal1 = checksum(packetData, 1024);
+				}
+				else if (errorCheckActive == 0) {
+					checkVal1 = checkVal0;
+				}
+
+			}
+			else {
+				checkVal0 = 0xFF;
+				checkVal1 = 0x00;
+			}
+
+			
 
 			//printf("check0 = %x, check1 = %x\n", checkVal0, checkVal1);
 
+
 			// if they are equal, send the ack to tell client to send next packet
 			if (checkVal0 == checkVal1) {
-				fileEnd = Make_File(&fpOut, packetData);
+
+				if (sequenceExpected == sequenceRecv) {
+
+				}
+
+				if (packetLost == 0) {
+					if (sequenceExpected == sequenceRecv) {
+						fileEnd = Make_File(&fpOut, packetData);
+					}
+				}
 
 				if (sendto(server, ack, recv_len, 0, (struct sockaddr*)&client, slen) == SOCKET_ERROR)
 				{
@@ -298,6 +348,7 @@ int main(int argc, char* argv[])
 
 
 	}
+
 
 	//close socket
 	closesocket(server);
