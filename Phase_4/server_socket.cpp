@@ -26,10 +26,27 @@ using namespace::std;
 
 #define BUFLEN 10000
 
-#define corruptionPercent 0.100
+
+//Adjust Corruption and loss variables here
+//	|
+//	|
+//	|
+//	|
+//	|
+// \ /
+//	V
+
+#define corruptionPercent 0.000
 #define corruptionStrength 0.100
 #define percentLost 0.000
+
+#define ackcorruptionPercent 0.100
+#define ackcorruptionStrength 0.100
+#define ackpercentLost 0.000
+
 #define errorCheckActive 1
+
+//---------------------------------
 
 char inStr[] = "Space_dress.bmp";
 char outStr[] = "bmp_out.bmp";
@@ -180,12 +197,12 @@ int main(int argc, char* argv[])
 	int slen, recv_len;
 	char* localIP;
 	char buf[BUFLEN];
-	char ack[5] = "Ack";
-	char nack[5] = "Nack";
+	char ack0[5] = "Ack0";
+	char ack1[5] = "Ack1";
 	char done_message[20] = "file_send_done";
 	int checkVal0, checkVal1;
 	char packetData[1029];
-	int sequenceExpected = 1;
+	int sequenceExpected = 0;
 	int sequenceRecv;
 
 	FILE* fpOut;
@@ -258,6 +275,7 @@ int main(int argc, char* argv[])
 		}
 
 
+
 		//printf("Received packet from %s:%d\n", inet_ntoa(client.sin_addr), ntohs(client.sin_port));
 
 		if (strcmp(buf, done_message) == 0) {
@@ -289,6 +307,8 @@ int main(int argc, char* argv[])
 					checkVal1 = checkVal0;
 				}
 
+				sequenceRecv = packetData[1028];
+
 			}
 			else {
 				checkVal0 = 0xFF;
@@ -302,33 +322,72 @@ int main(int argc, char* argv[])
 
 			// if they are equal, send the ack to tell client to send next packet
 			if (checkVal0 == checkVal1) {
-
-				if (sequenceExpected == sequenceRecv) {
-
-				}
-
 				if (packetLost == 0) {
 					if (sequenceExpected == sequenceRecv) {
 						fileEnd = Make_File(&fpOut, packetData);
+						
+						//alternate expected sequence number if good sequence number received
+						if (sequenceExpected == 1) {
+							sequenceExpected = 0;
+						}
+						else {
+							sequenceExpected = 1;
+						}
+
+
+						//Test for ACK loss / error
+						int ackCorrupted = Corruptor_Challenge(ackcorruptionPercent, ackcorruptionStrength, buf);
+						int ackLost = Packet_Loss(ackpercentLost, buf);
+
+						if (ackCorrupted == 1 || ackLost == 1) {
+
+						}
+						else if (sequenceRecv == 0) {
+
+							if (sendto(server, ack0, recv_len, 0, (struct sockaddr*)&client, slen) == SOCKET_ERROR)
+							{
+								printf("sendto() failed with error code : %d", WSAGetLastError());
+								while (1);
+								exit(EXIT_FAILURE);
+							}
+						}
+						else if (sequenceRecv == 1) {
+
+							if (sendto(server, ack1, recv_len, 0, (struct sockaddr*)&client, slen) == SOCKET_ERROR)
+							{
+								printf("sendto() failed with error code : %d", WSAGetLastError());
+								while (1);
+								exit(EXIT_FAILURE);
+							}
+
+						}
+
+
+					}
+					else {
+						if (sequenceRecv == 0) {
+
+							if (sendto(server, ack0, recv_len, 0, (struct sockaddr*)&client, slen) == SOCKET_ERROR)
+							{
+								printf("sendto() failed with error code : %d", WSAGetLastError());
+								while (1);
+								exit(EXIT_FAILURE);
+							}
+						}
+						else if (sequenceRecv == 1) {
+
+							if (sendto(server, ack1, recv_len, 0, (struct sockaddr*)&client, slen) == SOCKET_ERROR)
+							{
+								printf("sendto() failed with error code : %d", WSAGetLastError());
+								while (1);
+								exit(EXIT_FAILURE);
+							}
+
+						}
 					}
 				}
 
-				if (sendto(server, ack, recv_len, 0, (struct sockaddr*)&client, slen) == SOCKET_ERROR)
-				{
-					printf("sendto() failed with error code : %d", WSAGetLastError());
-					while (1);
-					exit(EXIT_FAILURE);
-				}
-			}
-
-			// if they arent equal send the nack and tell client to resent
-			else {
-				if (sendto(server, nack, recv_len, 0, (struct sockaddr*)&client, slen) == SOCKET_ERROR)
-				{
-					printf("sendto() failed with error code : %d", WSAGetLastError());
-					while (1);
-					exit(EXIT_FAILURE);
-				}
+				
 			}
 			
 		}
