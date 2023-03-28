@@ -30,8 +30,8 @@ using namespace::std;
 
 char inStr[] = "Space_dress.bmp";
 char outStr[] = "bmp_out.bmp";
-char ack[5] = "Ack";
-char nack[5] = "Nack";
+char ack0[5] = "Ack0";
+char ack1[5] = "Ack1";
 
 int checksum(char* packetData, int size) {
 	/*
@@ -362,57 +362,64 @@ int main(int argc, char* argv[])
 			fileEnd = Make_Packet(&fpIn, packetData, sequence);
 			//endResult = checksum(packetData, 1024);
 
+		}
 
-		if (fileEnd == 0) {
-			//send the message
-			if (sendto(client, concat, 1029, 0, (struct sockaddr*)&si_other, slen) == SOCKET_ERROR)
-			{
-				printf("sendto() failed with error code : %d", WSAGetLastError());
-				while (1);
-				exit(EXIT_FAILURE);
+			if (fileEnd == 0) {
+				//send the message
+				if (sendto(client, packetData, 1029, 0, (struct sockaddr*)&si_other, slen) == SOCKET_ERROR)
+				{
+					printf("sendto() failed with error code : %d", WSAGetLastError());
+					while (1);
+					exit(EXIT_FAILURE);
+				}
 			}
-		}
-		else {
-			//send the message
-			if (sendto(client, message, strlen(message), 0, (struct sockaddr*)&si_other, slen) == SOCKET_ERROR)
-			{
-				printf("sendto() failed with error code : %d", WSAGetLastError());
-				while (1);
-				exit(EXIT_FAILURE);
+			else {
+				//send the message
+				if (sendto(client, message, strlen(message), 0, (struct sockaddr*)&si_other, slen) == SOCKET_ERROR)
+				{
+					printf("sendto() failed with error code : %d", WSAGetLastError());
+					while (1);
+					exit(EXIT_FAILURE);
+				}
 			}
-		}
 
-		//receive a reply and print it
-		//clear the buffer by filling null, it might have previously received data
-		memset(buf, '\0', BUFLEN);
+			//receive a reply and print it
+			//clear the buffer by filling null, it might have previously received data
+			memset(buf, '\0', BUFLEN);
 
-		//try to receive some data, this is a blocking call
+			//try to receive some data, this is a blocking call
 
-		
 
-		if (recvfrom(client, buf, BUFLEN, 0, (struct sockaddr*)&si_other, &slen) == SOCKET_ERROR)
-		{
-			//printf("recvfrom() failed with error code : %d", WSAGetLastError());
-			error = WSAGetLastError();
-		}
+			if (recvfrom(client, buf, BUFLEN, 0, (struct sockaddr*)&si_other, &slen) == SOCKET_ERROR)
+			{
+				//printf("recvfrom() failed with error code : %d", WSAGetLastError());
+				error = WSAGetLastError();
+			}
 
-		//puts(buf);
+			//puts(buf);
 
-		if (error == 10060) {
-			//Timeout happened
-			checkValid = 0;
-		}
+			if (error == 10060) {
+				//Timeout happened
+				checkValid = 0;
+				error = 0;
+			}
 
-		else if (strcmp(buf, ack) == 0) {
-			checkValid = 1;
-		}
+			else if ((strcmp(buf, ack0) == 0) && sequence == 0) {
+				checkValid = 1;
+			}
+			else if ((strcmp(buf, ack1) == 0) && sequence == 1) {
+				checkValid = 1;
+			}
+			else {
+				checkValid = 0;
+			}
 
-		//delay 100ms to artificially slow program down
-		//Sleep(100);
+			//delay 100ms to artificially slow program down
+			//Sleep(100);
 
-		if (fileEnd == 1) {
-			fclose(fpIn);
-		}
+			if (fileEnd == 1) {
+				fclose(fpIn);
+			}
 	}
 
 	end = clock();
