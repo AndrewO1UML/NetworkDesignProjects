@@ -208,6 +208,7 @@ int main(int argc, char* argv[])
 	unsigned short send_base;
 	unsigned short next_seq;
 	unsigned short ack;
+	unsigned short final_ack;
 	char packetData[1030];
 
 	srand(time(NULL));		//Initialize random numbers
@@ -353,8 +354,12 @@ int main(int argc, char* argv[])
 
 	next_seq = 0;
 	send_base = 0;
+	ack = 0;
+	final_ack = 0xFFFF;
+	int transmission_done = 0;
+	int final_ack_lock = 0;
 
-	while (fileEnd == 0)
+	while (!transmission_done)
 	{
 		
 		if ((next_seq - send_base) < (Window_Size - 1)) {
@@ -371,6 +376,13 @@ int main(int argc, char* argv[])
 					exit(EXIT_FAILURE);
 				}
 			}
+			else {
+				if (final_ack_lock == 0) {
+					final_ack = next_seq - 1;
+					final_ack_lock = 1;
+				}
+				//printf("final_ack = %x\n", final_ack);
+			}
 
 			++next_seq;
 		}
@@ -382,7 +394,6 @@ int main(int argc, char* argv[])
 			memset(buf, '\0', BUFLEN);
 
 			//try to receive some data, this is a blocking call
-
 
 			if (recvfrom(client, buf, BUFLEN, 0, (struct sockaddr*)&si_other, &slen) == SOCKET_ERROR)
 			{
@@ -401,7 +412,7 @@ int main(int argc, char* argv[])
 					//this failed
 					printf("fseek() failed\n");
 				}
-
+				
 				error = 0;
 			}
 			else {
@@ -419,7 +430,8 @@ int main(int argc, char* argv[])
 		}
 
 		//close up shop
-		if ((fileEnd == 1) && (next_seq == send_base)) {
+		if (ack == final_ack) {
+			transmission_done = 1;
 			fclose(fpIn);
 
 			//send the closing message
