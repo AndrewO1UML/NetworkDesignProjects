@@ -37,10 +37,10 @@ using namespace::std;
 //	V
 
 #define corruptionPercent 0.000
-#define corruptionStrength 0.100
-#define percentLost 0.000
+#define corruptionStrength 0.000
+#define percentLost 0.100
 
-#define ackcorruptionPercent 0.000
+#define ackcorruptionPercent 0.100
 #define ackcorruptionStrength 0.100
 #define ackpercentLost 0.000
 
@@ -327,8 +327,8 @@ int main(int argc, char* argv[])
 					if (sequenceExpected == sequenceRecv) {
 						fileEnd = Make_File(&fpOut, packetData);
 						
+						last_ack = sequenceExpected;
 						++sequenceExpected;
-						last_ack = sequenceRecv;
 						printf("last_ack: %x\n", last_ack);
 
 						//Test for ACK loss / error
@@ -379,7 +379,7 @@ int main(int argc, char* argv[])
 
 	}
 
-
+	while(1);
 	//close socket
 	closesocket(server);
 	WSACleanup();
