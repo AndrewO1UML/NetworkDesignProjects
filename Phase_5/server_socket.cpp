@@ -36,11 +36,11 @@ using namespace::std;
 // \ /
 //	V
 
-#define corruptionPercent 0.000
-#define corruptionStrength 0.000
-#define percentLost 0.100
+#define corruptionPercent 0.200
+#define corruptionStrength 0.500
+#define percentLost 0.200
 
-#define ackcorruptionPercent 0.100
+#define ackcorruptionPercent 0.000
 #define ackcorruptionStrength 0.100
 #define ackpercentLost 0.000
 
@@ -68,13 +68,13 @@ int checksum(char* packetData, int size) {
 	return ~result;
 }
 
-int Make_Packet(FILE** fpIn, char* packetData, char sequence) {
+int Make_Packet(FILE** fpIn, char* packetData, unsigned short sequence) {
 	/*
 		updates packetData array to be the next 1KB in your defined "fpIn"
 		returns 1 when the end of the file has been reached
 		otherwise 0
 
-		adds the checksum values in fields 1024-1027, and the sequence number in 1028
+		adds the checksum values in fields 1024-1027, and the sequence number in 1028-1029
 	*/
 	int freadReturn;
 	int fileEnd = 0;
@@ -92,9 +92,35 @@ int Make_Packet(FILE** fpIn, char* packetData, char sequence) {
 	packetData[1025] = (char)((checksumVal & 0x00FF0000) >> 16);
 	packetData[1026] = (char)((checksumVal & 0x0000FF00) >> 8);
 	packetData[1027] = (char)(checksumVal & 0x000000FF);
-	packetData[1028] = sequence;
+	packetData[1028] = (char)((sequence & 0xFF00) >> 8);
+	packetData[1029] = (char)(sequence & 0x00FF);
 
 	return fileEnd;
+}
+
+int Make_Packet_Ack(unsigned short ack_num, char* packetData) {
+	/*
+		turns the ack num to be sent into a packed were bits 0-1 contain the ack value and bits 2-5 contain the checksum
+
+		returns the checksum value
+	*/
+	char temp_packet[2];
+	int check_val;
+
+	temp_packet[0] = (char)((ack_num & 0xFF00) >> 8);
+	temp_packet[1] = (char)(ack_num & 0x00FF);
+
+	check_val = checksum(temp_packet, 2);
+
+
+	packetData[0] = temp_packet[0];
+	packetData[1] = temp_packet[1];
+	packetData[2] = (char)((check_val & 0xFF000000) >> 24);
+	packetData[3] = (char)((check_val & 0x00FF0000) >> 16);
+	packetData[4] = (char)((check_val & 0x0000FF00) >> 8);
+	packetData[5] = (char)(check_val & 0x000000FF);
+
+	return check_val;
 }
 
 int Make_File(FILE** fpOut, char* packetData) {
@@ -138,7 +164,7 @@ int Corruptor_Challenge(float challenge, float corruption_amount, char* packetDa
 	if (random_num < (challenge * 1000)) {
 		// challenge hits
 
-		for (int i = 0; i < 1024; ++i) {
+		for (int i = 0; i < sizeof(packetData); ++i) {
 			int r = rand() % 1000;
 			if (r < (corruption_amount * 1000)) {
 				packetData[i] = packetData[i] ^ 0xFF;
@@ -197,9 +223,9 @@ int main(int argc, char* argv[])
 	int slen, recv_len;
 	char* localIP;
 	char buf[BUFLEN];
-	char ack[2];
+	char ack[6];
 	char done_message[20] = "file_send_done";
-	int checkVal0, checkVal1;
+	int checkVal0, checkVal1, check_ack;
 	char packetData[1030];
 	unsigned short sequenceExpected = 0;
 	unsigned short last_ack;
@@ -253,7 +279,7 @@ int main(int argc, char* argv[])
 	}
 
 	int fileEnd = 0;
-
+	last_ack = 0;
 
 	//keep listening for data
 	while (fileEnd == 0)
@@ -320,6 +346,8 @@ int main(int argc, char* argv[])
 
 			//printf("check0 = %x, check1 = %x\n", checkVal0, checkVal1);
 
+			//test of ack will be lost
+			int ackLost = Packet_Loss(ackpercentLost, buf);
 
 			// if they are equal, send the ack to tell client to send next packet
 			if (checkVal0 == checkVal1) {
@@ -329,20 +357,14 @@ int main(int argc, char* argv[])
 						
 						last_ack = sequenceExpected;
 						++sequenceExpected;
-						printf("last_ack: %x\n", last_ack);
+						//printf("last_ack: %x\n", last_ack);
 
-						//Test for ACK loss / error
-						int ackCorrupted = Corruptor_Challenge(ackcorruptionPercent, ackcorruptionStrength, buf);
-						int ackLost = Packet_Loss(ackpercentLost, buf);
 
-						if (ackCorrupted == 1 || ackLost == 1) {
+						if (ackLost == 0) {
 
-						}
-						else{
-
-							ack[0] = (char)((last_ack & 0xFF00) >> 8);
-							ack[1] = (char)(last_ack & 0x00FF);
+							check_ack = Make_Packet_Ack(last_ack, ack);
 							//printf("ack[0] = %x, ack[1] = %x\n", ack[0], ack[1]);
+							int ackCorrupted = Corruptor_Challenge(ackcorruptionPercent, ackcorruptionStrength, ack);
 
 							if (sendto(server, ack, recv_len, 0, (struct sockaddr*)&client, slen) == SOCKET_ERROR)
 							{
@@ -353,15 +375,21 @@ int main(int argc, char* argv[])
 						}
 
 					}
-					else {
-						ack[0] = (char)((last_ack & 0xFF00) >> 8);
-						ack[1] = (char)(last_ack & 0x00FF);
+					else if (last_ack == 0) {
 
-						if (sendto(server, ack, recv_len, 0, (struct sockaddr*)&client, slen) == SOCKET_ERROR)
-						{
-							printf("sendto() failed with error code : %d", WSAGetLastError());
-							while (1);
-							exit(EXIT_FAILURE);
+					}
+					else {
+						if (ackLost == 0) {
+							check_ack = Make_Packet_Ack(last_ack, ack);
+
+							int ackCorrupted = Corruptor_Challenge(ackcorruptionPercent, ackcorruptionStrength, ack);
+
+							if (sendto(server, ack, recv_len, 0, (struct sockaddr*)&client, slen) == SOCKET_ERROR)
+							{
+								printf("sendto() failed with error code : %d", WSAGetLastError());
+								while (1);
+								exit(EXIT_FAILURE);
+							}
 						}
 					}
 				}
@@ -379,7 +407,6 @@ int main(int argc, char* argv[])
 
 	}
 
-	while(1);
 	//close socket
 	closesocket(server);
 	WSACleanup();
