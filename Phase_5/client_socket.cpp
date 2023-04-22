@@ -22,7 +22,8 @@ using namespace::std;
 
 #pragma comment(lib,"ws2_32.lib") //Winsock Library
 
-#define Window_Size 10
+#define timeout 10 //ms
+#define Window_Size 50
 #define BUFLEN 10000 
 #define packetDebugMode 0
 
@@ -232,8 +233,9 @@ int main(int argc, char* argv[])
 	}
 
 	printf("Socket created.\n");
+	
+	int read_timeout = timeout;
 
-	int read_timeout = 10; // 10ms
 	setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, (char *) &read_timeout, sizeof read_timeout);
 
 	//cout << "Local IP: " << inet_addr("127.0.0.1") << endl;
@@ -418,9 +420,24 @@ int main(int argc, char* argv[])
 			else {
 				ack = ((int)buf[0] << 8) & 0xFF00;
 				ack |= ((int)buf[1]) & 0x00FF;
-				printf("ack = %x\n", ack);
-				send_base = ack + 1;
-				//++send_base;
+
+				int check0, check1;
+
+				check0 = ((int)buf[2] << 24) & 0xFF000000;
+				check0 |= ((int)buf[3] << 16) & 0x00FF0000;
+				check0 |= ((int)buf[4] << 8) & 0x0000FF00;
+				check0 |= ((int)buf[5]) & 0x000000FF;
+
+				check1 = checksum(buf, 2);
+
+				if (check0 == check1) {
+					//checksum is good
+					send_base = ack + 1;
+					//printf("ack = %x\n", ack);
+				}
+				else {
+					//printf("Bad ack check");
+				}
 			}
 		}
 		else {
