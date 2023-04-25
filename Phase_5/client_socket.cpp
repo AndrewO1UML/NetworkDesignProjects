@@ -23,7 +23,7 @@ using namespace::std;
 #pragma comment(lib,"ws2_32.lib") //Winsock Library
 
 #define timeout 10 //ms
-#define Window_Size 50
+#define Window_Size 10
 #define BUFLEN 10000 
 #define packetDebugMode 0
 
@@ -35,21 +35,24 @@ char outStr[] = "bmp_out.bmp";
 char ack0[5] = "Ack0";
 char ack1[5] = "Ack1";
 
-int checksum(char* packetData, int size) {
+unsigned short checksum(char* packetData, int size) {
 	/*
-		Take the sum of the 1024 Bytes (first byte + second byte + ... + 1024th Byte)
+		Take the sum of the 1024 bytes split up into 16 bit words ((first byte << 8 )| second byte + ... + 1024th Byte)
 		The sum is stored into result and then returns is complement.
 		Ex: packeData[1} has 1024 blocks which contains 1 byte in each block, this function adds those up together
 			and takes it complement.
 	*/
-	int result = 0;
+	unsigned short result = 0;
 	int i;
+	char tempData[2];
 
-	for (i = 0; i < size; i++) {
-		result += packetData[i];
+	for (i = 0; i < size; i += 2) {
+		tempData[0] = packetData[i];
+		tempData[1] = packetData[i + 1];
+		result += (((unsigned short)tempData[0]) << 8) | (unsigned short)tempData[1];
 	}
 
-	//printf("checksum after calcuation: %x\n", ~result);
+	//printf("Check val = %x\n", ~result);
 
 	return ~result;
 }
@@ -60,11 +63,10 @@ int Make_Packet(FILE** fpIn, char* packetData, unsigned short sequence) {
 		returns 1 when the end of the file has been reached
 		otherwise 0
 
-		adds the checksum values in fields 1024-1027, and the sequence number in 1028-1029
+		adds the checksum values in fields 1024-1025, and the sequence number in 1028-1029
 	*/
 	int freadReturn;
 	int fileEnd = 0;
-	int checksumVal = 0;
 
 
 	freadReturn = fread(packetData, 1, 1024, *fpIn);
@@ -72,12 +74,11 @@ int Make_Packet(FILE** fpIn, char* packetData, unsigned short sequence) {
 		fileEnd = 1;
 	}
 
-	checksumVal = checksum(packetData, 1024);
+	unsigned short checksumVal = checksum(packetData, 1024);
+	//printf("sent check = %x\n", checksumVal);
 
-	packetData[1024] = (char)((checksumVal & 0xFF000000) >> 24);
-	packetData[1025] = (char)((checksumVal & 0x00FF0000) >> 16);
-	packetData[1026] = (char)((checksumVal & 0x0000FF00) >> 8);
-	packetData[1027] = (char)(checksumVal & 0x000000FF);
+	packetData[1024] = (char)((checksumVal & 0xFF00) >> 8);
+	packetData[1025] = (char)(checksumVal & 0x00FF);
 	packetData[1028] = (char)((sequence & 0xFF00) >> 8);
 	packetData[1029] = (char)(sequence & 0x00FF);
 
@@ -266,87 +267,6 @@ int main(int argc, char* argv[])
 
 	int fileEnd = 0;
 
-	if (packetDebugMode == 1) {
-
-
-		int fileEnd = 0;
-		int fileEndOut = 0;
-		int packetValid = 1; // set to 2 for corruptor check
-		int packetCorrupted;
-		int preCheckVal, endCheckVal;
-		char cleanData[1029];
-		char sequence = 1;
-
-		int error = 0;
-
-		while (fileEnd == 0) {
-
-			// create packet and inital checksum
-			if (packetValid == 1) {
-				
-
-
-				fileEnd = Make_Packet(&fpIn, packetData, sequence);
-				memcpy(cleanData, packetData, sizeof(cleanData));
-
-
-				preCheckVal = ((int)packetData[1024] << 24) & 0xFF000000;
-				preCheckVal |= ((int)packetData[1025] << 16) & 0x00FF0000;
-				preCheckVal |= ((int)packetData[1026] << 8) & 0x0000FF00;
-				preCheckVal |= ((int)packetData[1027]) & 0x000000FF;
-
-				//printf("checkSum before transmission = %x\n", preCheckVal);
-
-
-				packetValid = 0;
-
-			}
-			// loop here until valid checksum
-			else if (packetValid == 0){
-				memcpy(packetData, cleanData, sizeof(cleanData));
-				packetCorrupted = Corruptor_Challenge(corruptionPercent, corruptionStrength, packetData);
-
-				if (packetCorrupted) {
-					printf("Packet Corrupted\n");
-				}
-
-
-				endCheckVal = checksum(packetData, 1024);
-				printf("checkSum after transmission = %x\n", endCheckVal);
-
-
-				if (endCheckVal == preCheckVal) {
-					packetValid = 1;
-
-
-					fileEndOut = Make_File(&fpOut, packetData);
-				}
-
-			}
-			// test corruptor
-			else if (packetValid == 2) {
-				fileEnd = Make_Packet(&fpIn, packetData, sequence);
-				packetCorrupted = Corruptor_Challenge(corruptionPercent, corruptionStrength, packetData);
-				fileEndOut = Make_File(&fpOut, packetData);
-
-			}
-
-			
-			
-		
-
-
-		}
-
-		if (fileEnd == 1) {
-			fclose(fpIn);
-			fclose(fpOut);
-		}
-
-		return 0;
-	}
-
-
 
 	//start communication
 
@@ -367,6 +287,7 @@ int main(int argc, char* argv[])
 		if ((next_seq - send_base) < (Window_Size - 1)) {
 			//If not all packets in the window are sent, keep sending
 
+
 			fileEnd = Make_Packet(&fpIn, packetData, next_seq);
 
 			if (fileEnd == 0) {
@@ -377,6 +298,8 @@ int main(int argc, char* argv[])
 					while (1);
 					exit(EXIT_FAILURE);
 				}
+
+
 			}
 			else {
 				if (final_ack_lock == 0) {
@@ -428,12 +351,21 @@ int main(int argc, char* argv[])
 				check0 |= ((int)buf[4] << 8) & 0x0000FF00;
 				check0 |= ((int)buf[5]) & 0x000000FF;
 
-				check1 = checksum(buf, 2);
+				int result = 0;
+
+				for (int i = 0; i < 2; i++) {
+					result += buf[i];
+				}
+
+				check1 = ~result;
 
 				if (check0 == check1) {
 					//checksum is good
-					send_base = ack + 1;
-					//printf("ack = %x\n", ack);
+					//sometimes checksum passes but the ack is wrong, ignoring definitely screwed up acks
+					if ((ack & 0x8000) == 0) {
+						send_base = ack + 1;
+						//printf("ack = %x\n", ack);
+					}
 				}
 				else {
 					//printf("Bad ack check");
@@ -443,7 +375,10 @@ int main(int argc, char* argv[])
 		else {
 			// should not be possible, send help
 			//guess we just restart
-			printf("I shouldn't be here\n");
+			//printf("I shouldn't be here\n");
+			next_seq = 0;
+			send_base = 0;
+			//while (1);
 		}
 
 		//close up shop
