@@ -36,9 +36,9 @@ using namespace::std;
 // \ /
 //	V
 
-#define corruptionPercent 0.200
+#define corruptionPercent 0.000
 #define corruptionStrength 0.500
-#define percentLost 0.200
+#define percentLost 0.000
 
 #define ackcorruptionPercent 0.000
 #define ackcorruptionStrength 0.100
@@ -51,19 +51,24 @@ using namespace::std;
 char inStr[] = "Space_dress.bmp";
 char outStr[] = "bmp_out.bmp";
 
-int checksum(char* packetData, int size) {
+unsigned short checksum(char* packetData, int size) {
 	/*
-		Take the sum of the 1024 Bytes (first byte + second byte + ... + 1024th Byte)
+		Take the sum of the 1024 bytes split up into 16 bit words ((first byte << 8 )| second byte + ... + 1024th Byte)
 		The sum is stored into result and then returns is complement.
 		Ex: packeData[1} has 1024 blocks which contains 1 byte in each block, this function adds those up together
 			and takes it complement.
 	*/
-	int result = 0;
+	unsigned short result = 0;
 	int i;
+	char tempData[2];
 
-	for (i = 0; i < size; i++) {
-		result += packetData[i];
+	for (i = 0; i < size; i += 2) {
+		tempData[0] = packetData[i];
+		tempData[1] = packetData[i + 1];
+		result += (((unsigned short)tempData[0]) << 8) | (unsigned short)tempData[1];
 	}
+
+	//printf("Check val = %x\n", ~result);
 
 	return ~result;
 }
@@ -74,11 +79,10 @@ int Make_Packet(FILE** fpIn, char* packetData, unsigned short sequence) {
 		returns 1 when the end of the file has been reached
 		otherwise 0
 
-		adds the checksum values in fields 1024-1027, and the sequence number in 1028-1029
+		adds the checksum values in fields 1024-1025, and the sequence number in 1028-1029
 	*/
 	int freadReturn;
 	int fileEnd = 0;
-	int checksumVal = 0;
 
 
 	freadReturn = fread(packetData, 1, 1024, *fpIn);
@@ -86,21 +90,21 @@ int Make_Packet(FILE** fpIn, char* packetData, unsigned short sequence) {
 		fileEnd = 1;
 	}
 
-	checksumVal = checksum(packetData, 1024);
+	unsigned short checksumVal = checksum(packetData, 1024);
+	//printf("sent check = %x\n", checksumVal);
 
-	packetData[1024] = (char)((checksumVal & 0xFF000000) >> 24);
-	packetData[1025] = (char)((checksumVal & 0x00FF0000) >> 16);
-	packetData[1026] = (char)((checksumVal & 0x0000FF00) >> 8);
-	packetData[1027] = (char)(checksumVal & 0x000000FF);
+	packetData[1024] = (char)((checksumVal & 0xFF00) >> 8);
+	packetData[1025] = (char)(checksumVal & 0x00FF);
 	packetData[1028] = (char)((sequence & 0xFF00) >> 8);
 	packetData[1029] = (char)(sequence & 0x00FF);
 
 	return fileEnd;
 }
 
-int Make_Packet_Ack(unsigned short ack_num, char* packetData) {
+unsigned short Make_Packet_Ack(unsigned short ack_num, char* packetData) {
 	/*
 		turns the ack num to be sent into a packed were bits 0-1 contain the ack value and bits 2-5 contain the checksum
+		it calculates 2 seperate checksums becaue just one was causing some erroneous checks, screwing up the transmission
 
 		returns the checksum value
 	*/
@@ -110,8 +114,14 @@ int Make_Packet_Ack(unsigned short ack_num, char* packetData) {
 	temp_packet[0] = (char)((ack_num & 0xFF00) >> 8);
 	temp_packet[1] = (char)(ack_num & 0x00FF);
 
-	check_val = checksum(temp_packet, 2);
+	int result = 0;
+	int i;
 
+	for (i = 0; i < 2; i++) {
+		result += packetData[i];
+	}
+
+	check_val = ~result;
 
 	packetData[0] = temp_packet[0];
 	packetData[1] = temp_packet[1];
@@ -119,6 +129,7 @@ int Make_Packet_Ack(unsigned short ack_num, char* packetData) {
 	packetData[3] = (char)((check_val & 0x00FF0000) >> 16);
 	packetData[4] = (char)((check_val & 0x0000FF00) >> 8);
 	packetData[5] = (char)(check_val & 0x000000FF);
+
 
 	return check_val;
 }
@@ -225,7 +236,7 @@ int main(int argc, char* argv[])
 	char buf[BUFLEN];
 	char ack[6];
 	char done_message[20] = "file_send_done";
-	int checkVal0, checkVal1, check_ack;
+	unsigned short checkVal0, checkVal1, check_ack;
 	char packetData[1030];
 	unsigned short sequenceExpected = 0;
 	unsigned short last_ack;
@@ -301,7 +312,6 @@ int main(int argc, char* argv[])
 		}
 
 
-
 		//printf("Received packet from %s:%d\n", inet_ntoa(client.sin_addr), ntohs(client.sin_port));
 
 		if (strcmp(buf, done_message) == 0) {
@@ -319,12 +329,14 @@ int main(int argc, char* argv[])
 				packetData[i] = buf[i];
 			}
 
+
 			//simulating lost packet, need to force fail checksum to get program to skip make_packet
 			if (packetLost == 0) {
-				checkVal0 = ((int)packetData[1024] << 24) & 0xFF000000;
-				checkVal0 |= ((int)packetData[1025] << 16) & 0x00FF0000;
-				checkVal0 |= ((int)packetData[1026] << 8) & 0x0000FF00;
-				checkVal0 |= ((int)packetData[1027]) & 0x000000FF;
+				checkVal0 = ((unsigned short)packetData[1024] << 8) & 0xFF00;
+				checkVal0 |= (unsigned short)packetData[1025] & 0x00FF;
+
+				
+
 
 				if (errorCheckActive == 1) {
 					checkVal1 = checksum(packetData, 1024);
@@ -345,6 +357,7 @@ int main(int argc, char* argv[])
 			
 
 			//printf("check0 = %x, check1 = %x\n", checkVal0, checkVal1);
+			//while (1);
 
 			//test of ack will be lost
 			int ackLost = Packet_Loss(ackpercentLost, buf);
