@@ -280,6 +280,7 @@ int main(int argc, char* argv[])
 	final_ack = 0xFFFF;
 	int transmission_done = 0;
 	int final_ack_lock = 0;
+	int timeout_counter;
 
 	while (!transmission_done)
 	{
@@ -338,9 +339,18 @@ int main(int argc, char* argv[])
 					printf("fseek() failed\n");
 				}
 				
+				++timeout_counter;
+				
+				if (timeout_counter > 10) {
+					transmission_done = 1;
+				}
+				
 				error = 0;
 			}
 			else {
+				
+				timeout_counter = 0;
+				
 				ack = ((int)buf[0] << 8) & 0xFF00;
 				ack |= ((int)buf[1]) & 0x00FF;
 
