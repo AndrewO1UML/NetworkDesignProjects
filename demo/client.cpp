@@ -280,13 +280,14 @@ int main(int argc, char* argv[])
 	final_ack = 0xFFFF;
 	int transmission_done = 0;
 	int final_ack_lock = 0;
+	int timeout_count;
 
 	while (!transmission_done)
 	{
 		
 		if ((next_seq - send_base) < (Window_Size - 1)) {
 			//If not all packets in the window are sent, keep sending
-
+			
 
 			fileEnd = Make_Packet(&fpIn, packetData, next_seq);
 
@@ -341,9 +342,17 @@ int main(int argc, char* argv[])
 					printf("fseek() failed\n");
 				}
 				
+				++timeout_count;
+				//printf("timeout count = %d\n", timeout_count);
 				error = 0;
+
+				if (timeout_count > 10) {
+					transmission_done = 1;
+				}
 			}
 			else {
+				timeout_count = 0;
+
 				ack = ((int)buf[0] << 8) & 0xFF00;
 				ack |= ((int)buf[1]) & 0x00FF;
 
